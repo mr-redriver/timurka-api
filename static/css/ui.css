@@ -1,0 +1,82 @@
+.content-wrapper {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--width-content-area);
+  padding: 0 var(--padding-side-content-area);
+  margin: 0 auto;
+}
+
+.button {
+  --button-color-preset-primary: var(--color-elem-primary);
+  --button-padding-side: 0.75rem;
+  --button-height: 3.25rem;
+  --button-color-text: var(--button-color-preset-primary);
+  --button-color-hovered: var(--color-elem-accent-primary-alt);
+  --button-bg: var(--color-bg-tertiary);
+  --button-color-border: var(--button-bg);
+  --button-font-size: var(--font-size-span-ml);
+  --button-border-radius: var(--border-radius-s);
+
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.25rem;
+  box-sizing: border-box;
+  min-height: var(--button-height);
+  padding: 0 calc(var(--button-padding-side) + 0.25em);
+  border: 2px solid var(--button-color-border);
+  border-radius: var(--button-border-radius);
+  color: var(--button-color-text);
+  background: var(--button-bg);
+  font-size: var(--button-font-size);
+  font-weight: 500;
+  white-space: nowrap;
+  letter-spacing: var(--font-letter-spacing);
+  text-decoration: none;
+  cursor: pointer;
+  transition: var(--transition-m);
+}
+
+.button.is-aspect-ratio-1b1 {
+  min-width: var(--button-height);
+  width: var(--button-height);
+  --button-padding-side: 0 !important;
+}
+
+.button.is-style-accent {
+  position: relative;
+  --button-color-text: var(--color-bg-primary);
+  --button-bg: var(--gradient-accent) var(--color-elem-primary);
+  overflow: hidden;
+}
+
+.button.is-style-bordered {
+  --button-bg: transparent;
+  --button-color-border: var(--button-color-preset-primary);
+  --button-color-text: var(--button-color-preset-primary);
+}
+
+.button.is-style-accent .icon {
+  filter: var(--icon-filter-white);
+}
+
+.message-input {
+  color: var(--color-elem-primary);
+  width: 100%;
+  font-size: var(--font-size-content);
+  box-sizing: border-box; /* Чтобы padding не увеличивал общий размер */
+  height: 3.25rem;
+  border: none;
+  outline: none;
+}
+
+.heading {
+  font-family: var(--font-name-secondary);
+  font-size: var(--font-size-heading);
+  font-weight: 500;
+}
+
+.heading mark {
+  background: none;
+  color: var(--color-elem-accent-primary);
+}

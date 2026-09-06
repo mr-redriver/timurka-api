@@ -1,0 +1,22 @@
+# Основные зависимости RAG
+sentence-transformers
+faiss-cpu
+numpy
+
+# Flask сервер
+Flask==2.3.3
+flask-cors==4.0.0
+requests==2.31.0
+piper-tts==1.2.0
+vosk==0.3.45
+pyaudio==0.2.13
+
+# Для работы с GigaChat (уже есть requests)
+# Для переменных окружения
+python-dotenv
+
+# Для асинхронности (опционально)
+unicorn  # для production
+
+# Для WordPress интеграции
+# (дополнительных зависимостей не требуется)

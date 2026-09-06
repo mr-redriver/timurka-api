@@ -1,0 +1,59 @@
+.icon {
+  --icon-size: 1.25rem;
+  --icon-filter-white: grayscale(1) brightness(20);
+  --icon-filter-blue: brightness(380%) hue-rotate(30deg) contrast(150%);
+  --icon-filter-accent: brightness(650%) hue-rotate(170deg) contrast(450%);
+  --icon-filter-yellow: brightness(650%) hue-rotate(202deg) contrast(450%);
+  --icon-filter-hilight: brightness(370%) hue-rotate(-10deg) contrast(50%);
+  --icon-filter-red: brightness(250%) hue-rotate(68deg) contrast(230%);
+  --icon-filter-clear: none;
+
+  display: inline-block;
+  height: var(--icon-size);
+  aspect-ratio: 1/1;
+  background-size: contain;
+}
+
+.icon[data-type="arrow-reload"] {
+  background-image: url("../images/icons/arrow-reload.svg");
+}
+
+.icon[data-type="micro"] {
+  background-image: url("../images/icons/micro.svg");
+}
+
+.icon[data-type="message"] {
+  background-image: url("../images/icons/message.svg");
+}
+
+.icon[data-type="volume-max"] {
+  background-image: url("../images/icons/volume-max.svg");
+}
+
+.icon[data-type="volume-off"] {
+  background-image: url("../images/icons/volume-off.svg");
+}
+
+.icon[data-type="user-voice"] {
+  background-image: url("../images/icons/user-voice.svg");
+}
+
+.icon.is-color-white {
+  filter: var(--icon-filter-white) !important;
+}
+
+.icon.is-color-hilight {
+  filter: var(--icon-filter-hilight) !important;
+}
+
+.icon.is-color-accent {
+  filter: var(--icon-filter-accent) !important;
+}
+
+.icon.is-color-blue {
+  filter: var(--icon-filter-blue) !important;
+}
+
+.icon.is-color-red {
+  filter: var(--icon-filter-red) !important;
+}

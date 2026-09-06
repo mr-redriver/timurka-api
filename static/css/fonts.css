@@ -1,0 +1,39 @@
+@font-face {
+  font-family: "SN pro";
+  src: url(../fonts/SN_Pro/SNPro-VariableFont_wght.ttf);
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "SN pro";
+  src: url(../fonts/SN_Pro/SNPro-Italic-VariableFont_wght.ttf);
+  font-style: italic;
+}
+
+@font-face {
+  font-family: "Balsamiq Sans";
+  src: url(../fonts/Balsamiq_Sans/BalsamiqSans-Regular.ttf);
+  font-style: normal;
+}
+@font-face {
+  font-family: "Balsamiq Sans";
+  src: url(../fonts/Balsamiq_Sans/BalsamiqSans-Italic.ttf);
+  font-style: italic;
+}
+@font-face {
+  font-family: "Balsamiq Sans";
+  src: url(../fonts/Balsamiq_Sans/BalsamiqSans-Bold.ttf);
+  font-style: normal;
+  font-weight: 800;
+}
+@font-face {
+  font-family: "Balsamiq Sans";
+  src: url(../fonts/Balsamiq_Sans/BalsamiqSans-BoldItalic.ttf);
+  font-style: italic;
+  font-weight: 800;
+}
+
+@font-face {
+  font-family: "Noto Color Emoji";
+  src: url(../fonts/Noto_Color_Emoji/NotoColorEmoji-Regular.ttf);
+}

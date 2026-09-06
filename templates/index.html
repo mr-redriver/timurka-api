@@ -1,0 +1,847 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>Тимурка Ассистент с голосом</title>
+
+    <link rel="stylesheet" href="/static/css/normalize.css" />
+    <link rel="stylesheet" href="/static/css/root.css" />
+    <link rel="stylesheet" href="/static/css/fonts.css" />
+    <link rel="stylesheet" href="/static/css/ui.css" />
+    <link rel="stylesheet" href="/static/css/icons.css" />
+    <link rel="stylesheet" href="/static/css/chat.css" />
+
+  </head>
+  <body>
+    <main class="chat">
+      <div class="content-wrapper">
+        <div id="mascot" class="mascot-wrapper">
+          <div class="mascot"></div>
+        </div>
+        <div class="chat__banner">
+          <div class="chat-banner__headings">
+            <h2 class="heading">
+              Привет, я <mark>Тимурка</mark>.<br />Давай знакомиться!
+            </h2>
+            <div class="voice-controls">
+              <button id="voiceToggleBtn" class="button is-style-bordered" title="Включить/выключить голос">
+                <span class="icon" data-type="volume-max"></span>
+                <span class="voice-status">Голос включен</span>
+              </button>
+              <button id="voiceSelectBtn" class="button is-style-bordered" title="Выбрать голос">
+                <span class="icon" data-type="user-voice"></span>
+                <span class="current-voice" id="currentVoiceLabel">denis</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="chat__body" id="chatBody">
+          <div class="message" id="welcomeMessage">
+            <div class="message__bubble">
+              Привет! Я Тимурка 🤖 Меня создали в рамках национального проекта
+              «Семья». Люблю космос, а ещё знакомиться и отвечать на любые
+              вопросы!
+            </div>
+          </div>
+        </div>
+        <div class="chat__panel">
+          <div class="button is-aspect-ratio-1b1" id="voiceButton">
+            <span class="icon" data-type="micro"></span>
+          </div>
+          <input
+            type="text"
+            class="message-input"
+            id="messageInput"
+            placeholder="Спросить Тимурку"
+          />
+          <div class="button is-style-accent is-aspect-ratio-1b1" id="sendButton">
+            <span class="icon" data-type="message"></span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Модальное окно для выбора голоса -->
+    <div id="voiceModal" class="modal" style="display:none;">
+      <div class="modal-content">
+        <h3>Выберите голос Тимурки</h3>
+        <div id="voiceList" class="voice-list">
+          <!-- Список голосов будет загружен динамически -->
+        </div>
+        <button id="closeModalBtn" class="button is-style-secondary">Закрыть</button>
+      </div>
+    </div>
+
+    <script>
+      // ============================================
+      // ПОЛУЧАЕМ ВСЕ ЭЛЕМЕНТЫ
+      // ============================================
+      const mascot = document.getElementById('mascot');
+      const chatBody = document.getElementById('chatBody');
+      const messageInput = document.getElementById('messageInput');
+      const sendButton = document.getElementById('sendButton');
+      const voiceButton = document.getElementById('voiceButton');
+      const welcomeMessage = document.getElementById('welcomeMessage');
+      const voiceToggleBtn = document.getElementById('voiceToggleBtn');
+      const voiceSelectBtn = document.getElementById('voiceSelectBtn');
+      const voiceModal = document.getElementById('voiceModal');
+      const voiceList = document.getElementById('voiceList');
+      const closeModalBtn = document.getElementById('closeModalBtn');
+      const currentVoiceLabel = document.getElementById('currentVoiceLabel');
+
+      // ============================================
+      // КОНСТАНТЫ СООБЩЕНИЙ
+      // ============================================
+      const MESSAGES = {
+        // Сообщения об ошибках
+        ERROR_NO_INTERNET: 'Кажется у меня отключили интернет. Попробуй спросить меня немного позже или попроси сотрудников библиотеки включить его',
+        ERROR_SERVER: 'Я сплю, попроси сотрудников библиотеки разбудить меня',
+        ERROR_NO_MICROPHONE: 'Не удалось получить доступ к микрофону. Проверьте разрешения в браузере.',
+        ERROR_RECOGNITION: 'Не удалось распознать речь. Попробуйте еще раз.',
+        ERROR_EMPTY_MESSAGE: 'Введите текст или используйте голосовой ввод',
+
+        // Статусы
+        STATUS_CONNECTING: 'Подключение к микрофону...',
+        STATUS_RECORDING: 'Запись начата... Говорите',
+        STATUS_PROCESSING: 'Обработка речи...',
+        STATUS_RECOGNIZED: (text) => `Распознано: "${text}"`,
+        STATUS_STOPPED: 'Запись остановлена',
+
+        // Тексты для кнопок
+        VOICE_START: 'Начать запись',
+        VOICE_STOP: 'Остановить запись',
+        VOICE_PLACEHOLDER: 'Слушаю...',
+        INPUT_PLACEHOLDER: 'Спросить Тимурку',
+
+        // Сообщения чат-бота
+        WELCOME: 'Привет! Я Тимурка 🤖 Меня создали в рамках национального проекта «Семья». Люблю космос, а ещё знакомиться и отвечать на любые вопросы!',
+        DEFAULT_ERROR: '😅 Извините, произошла ошибка. Пожалуйста, попробуйте еще раз!'
+      };
+
+      // Сообщения для отображения в чате
+      const CHAT_MESSAGES = {
+        TYPING: 'Тимурка думает...',
+        ERROR_NO_INTERNET: MESSAGES.ERROR_NO_INTERNET,
+        ERROR_SERVER: MESSAGES.ERROR_SERVER
+      };
+
+      // ============================================
+      // ОБЪЯВЛЯЕМ ВСЕ ПЕРЕМЕННЫЕ
+      // ============================================
+      let isAudioEnabled = true;
+      let currentAudio = null;
+      let isRecording = false;
+      let isProcessing = false;
+      let recognitionTimeout = null;
+      let pendingSend = false;
+      let silenceTimer = null;
+      const SILENCE_TIMEOUT = 5000; // Таймер автоматической отправки сообщения при молчании
+      let lastAudioTimestamp = Date.now();
+      let isVoiceButtonLocked = false; // Блокировка кнопки микрофона
+      let isSendButtonLocked = false;
+
+      // ============================================
+      // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+      // ============================================
+
+      async function isRealInternetAvailable() {
+        // if (navigator.onLine) {
+        //   return true;
+        // } else {
+        //   return false;
+        // }
+        return true
+      }
+
+      // Функция для воспроизведения аудио из base64
+      function playAudio(audioBase64) {
+        if (!isAudioEnabled || !audioBase64) return;
+
+        try {
+          if (currentAudio) {
+            currentAudio.pause();
+            currentAudio = null;
+          }
+
+          const audioData = atob(audioBase64);
+          const arrayBuffer = new ArrayBuffer(audioData.length);
+          const view = new Uint8Array(arrayBuffer);
+          for (let i = 0; i < audioData.length; i++) {
+            view[i] = audioData.charCodeAt(i);
+          }
+
+          const blob = new Blob([view], { type: 'audio/wav' });
+          const url = URL.createObjectURL(blob);
+
+          currentAudio = new Audio(url);
+          currentAudio.onended = () => {
+            URL.revokeObjectURL(url);
+            currentAudio = null;
+          };
+          currentAudio.play().catch(error => {
+            console.error('Ошибка воспроизведения:', error);
+          });
+        } catch (error) {
+          console.error('Ошибка обработки аудио:', error);
+        }
+      }
+
+      // Функция разблокировки кнопки микрофона
+      function unlockVoiceButton() {
+        isVoiceButtonLocked = false;
+        voiceButton.classList.remove('is-loading');
+
+        // Если запись не идет, восстанавливаем иконку
+        if (!isRecording) {
+          voiceButton.querySelector('.icon').textContent = '';
+        } else {
+          voiceButton.querySelector('.icon').textContent = '';
+        }
+      }
+
+      // Функция для добавления сообщения в чат
+      function addMessage(text, isUser = false, audioBase64 = null) {
+        if (welcomeMessage) {
+          welcomeMessage.remove();
+        }
+
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${isUser ? 'is-from-user' : ''}`;
+
+        const bubble = document.createElement('div');
+        bubble.className = 'message__bubble';
+        bubble.textContent = text;
+
+        if (!isUser && audioBase64) {
+          const playBtn = document.createElement('button');
+          playBtn.className = 'play-audio-btn';
+          playBtn.innerHTML = '<span class="icon" data-type="volume-max"></span>';
+          playBtn.title = 'Прослушать ответ';
+          playBtn.onclick = () => playAudio(audioBase64);
+          bubble.appendChild(playBtn);
+        }
+
+        messageDiv.appendChild(bubble);
+        chatBody.appendChild(messageDiv);
+        chatBody.scrollTop = chatBody.scrollHeight;
+        smoothScrollToBottom();
+        return messageDiv;
+      }
+
+      // Функция для показа индикатора загрузки
+      function showTypingIndicator() {
+        const typingDiv = document.createElement('div');
+        typingDiv.className = 'message';
+        typingDiv.id = 'typingIndicator';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'message__bubble';
+        bubble.textContent = CHAT_MESSAGES.TYPING;
+        bubble.style.opacity = '0.6';
+
+        typingDiv.appendChild(bubble);
+        chatBody.appendChild(typingDiv);
+        chatBody.scrollTop = chatBody.scrollHeight;
+        return typingDiv;
+      }
+
+      // Функция отправки сообщения
+      async function sendMessage() {
+        // 1. ПРОВЕРКА ИНТЕРНЕТ-СОЕДИНЕНИЯ (САМАЯ ПЕРВАЯ)
+        if (!await isRealInternetAvailable()) {
+          addMessage(CHAT_MESSAGES.ERROR_NO_INTERNET);
+          return;
+        }
+
+        // 2. Защита от повторных нажатий во время обработки
+        if (isProcessing) {
+          console.log('⏳ Идет обработка, подождите...');
+          return;
+        }
+
+        // 3. Если идет запись, останавливаем и ждем результат
+        if (isRecording) {
+          const currentText = messageInput.value;
+          await stopVoiceRecording();
+          const finalMessage = messageInput.value.trim();
+
+          if (finalMessage) {
+            await doSendMessage(finalMessage);
+          } else if (currentText.trim()) {
+            await doSendMessage(currentText.trim());
+          }
+          return;
+        }
+
+        // 4. Если запись не идет, просто отправляем сообщение
+        const message = messageInput.value.trim();
+        if (message) {
+          await doSendMessage(message);
+        }
+      }
+
+      async function doSendMessage(message) {
+        if (!message || isSendButtonLocked) return;
+
+        // 1. ПРОВЕРКА ИНТЕРНЕТ-СОЕДИНЕНИЯ (САМАЯ ПЕРВАЯ)
+        if (!await isRealInternetAvailable()) {
+          addMessage(CHAT_MESSAGES.ERROR_NO_INTERNET);
+          return;
+        }
+
+        try {
+          isSendButtonLocked = true;
+          sendButton.classList.add('is-loading');
+          sendButton.querySelector('.icon').textContent = '';
+
+          addMessage(message, true);
+          messageInput.value = '';
+
+          const typingIndicator = showTypingIndicator();
+
+          // 2. ОТПРАВКА ЗАПРОСА НА СЕРВЕР (ТОЛЬКО ПОСЛЕ ПРОВЕРКИ ИНТЕРНЕТА)
+          let response;
+          try {
+            response = await fetch('/api/chat', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                message: message,
+                need_audio: isAudioEnabled
+              }),
+            });
+          } catch (fetchError) {
+            console.error('Ошибка соединения:', fetchError);
+            typingIndicator.remove();
+            // 3. ОБРАБОТКА ОШИБКИ СЕРВЕРА (ПОСЛЕ ПРОВЕРКИ ИНТЕРНЕТА)
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            unlockSendButton();
+            return;
+          }
+
+          // 4. ПРОВЕРКА СТАТУСА ОТВЕТА
+          if (!response.ok) {
+            typingIndicator.remove();
+            if (response.status >= 500) {
+              addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            } else {
+              addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            }
+            unlockSendButton();
+            return;
+          }
+
+          let data;
+          try {
+            data = await response.json();
+          } catch (parseError) {
+            console.error('Ошибка парсинга JSON:', parseError);
+            typingIndicator.remove();
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            unlockSendButton();
+            return;
+          }
+
+          typingIndicator.remove();
+
+          if (data.response) {
+            addMessage(data.response, false, data.has_audio ? data.audio : null);
+            if (data.has_audio && data.audio && isAudioEnabled) {
+              try {
+                playAudio(data.audio);
+              } catch (audioError) {
+                console.error('Ошибка воспроизведения аудио:', audioError);
+              }
+            }
+          } else if (data.error) {
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+          } else {
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+          }
+        } catch (error) {
+          console.error('Критическая ошибка:', error);
+          const typingIndicator = document.getElementById('typingIndicator');
+          if (typingIndicator) typingIndicator.remove();
+
+          // 5. ПРОВЕРКА ИНТЕРНЕТА ПРИ КРИТИЧЕСКОЙ ОШИБКЕ
+          if (!await isRealInternetAvailable()) {
+            addMessage(CHAT_MESSAGES.ERROR_NO_INTERNET);
+          } else {
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+          }
+        } finally {
+          unlockSendButton();
+        }
+      }
+
+      // Функция разблокировки кнопки отправки
+      function unlockSendButton() {
+        isSendButtonLocked = false;
+        sendButton.classList.remove('is-loading');
+        sendButton.querySelector('.icon').textContent = '';
+      }
+
+      // ============================================
+      // РАСПОЗНАВАНИЕ РЕЧИ ЧЕРЕЗ СЕРВЕР
+      // ============================================
+
+      async function startVoiceRecording() {
+        // 1. ПРОВЕРКА ИНТЕРНЕТ-СОЕДИНЕНИЯ (САМАЯ ПЕРВАЯ)
+        if (!await isRealInternetAvailable()) {
+          addMessage(CHAT_MESSAGES.ERROR_NO_INTERNET);
+          return;
+        }
+
+        // 2. Защита от повторных нажатий
+        if (isVoiceButtonLocked || isRecording || isProcessing) {
+          console.log('⏳ Кнопка уже обрабатывается или запись идет');
+          return;
+        }
+
+        try {
+          isVoiceButtonLocked = true;
+          voiceButton.classList.add('is-loading');
+          voiceButton.querySelector('.icon').textContent = '';
+
+          // 3. ПРОВЕРКА ДОСТУПНОСТИ РАСПОЗНАВАНИЯ
+          let statusResponse;
+          try {
+            statusResponse = await fetch('/api/voice/status');
+          } catch (fetchError) {
+            console.error('Ошибка проверки статуса:', fetchError);
+            // 4. ОБРАБОТКА ОШИБКИ СЕРВЕРА
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            unlockVoiceButton();
+            return;
+          }
+
+          if (!statusResponse.ok) {
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            unlockVoiceButton();
+            return;
+          }
+
+          let statusData;
+          try {
+            statusData = await statusResponse.json();
+          } catch (parseError) {
+            console.error('Ошибка парсинга статуса:', parseError);
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            unlockVoiceButton();
+            return;
+          }
+
+          if (!statusData.available) {
+            addMessage('Распознавание речи не доступно. Проверьте настройки.');
+            unlockVoiceButton();
+            return;
+          }
+
+          // 5. ЗАПУСК РАСПОЗНАВАНИЯ
+          let response;
+          try {
+            response = await fetch('/api/voice/start', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              }
+            });
+          } catch (fetchError) {
+            console.error('Ошибка запуска распознавания:', fetchError);
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            unlockVoiceButton();
+            return;
+          }
+
+          if (!response.ok) {
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            unlockVoiceButton();
+            return;
+          }
+
+          let data;
+          try {
+            data = await response.json();
+          } catch (parseError) {
+            console.error('Ошибка парсинга ответа:', parseError);
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            unlockVoiceButton();
+            return;
+          }
+
+          if (data.success) {
+            isRecording = true;
+            voiceButton.classList.remove('is-loading');
+            voiceButton.classList.add('recording');
+            voiceButton.querySelector('.icon').textContent = '';
+            messageInput.placeholder = MESSAGES.VOICE_PLACEHOLDER;
+
+            lastAudioTimestamp = Date.now();
+            resetSilenceTimer();
+
+            recognitionTimeout = setTimeout(() => {
+              if (isRecording) {
+                sendMessage();
+              }
+            }, 30000);
+
+            isVoiceButtonLocked = false;
+          } else {
+            addMessage('Не удалось запустить распознавание. Попробуйте еще раз.');
+            unlockVoiceButton();
+          }
+        } catch (error) {
+          console.error('Ошибка запуска распознавания:', error);
+          // 6. ПРОВЕРКА ИНТЕРНЕТА ПРИ ОШИБКЕ
+          if (!await isRealInternetAvailable()) {
+            addMessage(CHAT_MESSAGES.ERROR_NO_INTERNET);
+          } else {
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+          }
+          unlockVoiceButton();
+        }
+      }
+
+      async function stopVoiceRecording() {
+        if (!isRecording) return;
+
+        // 1. ПРОВЕРКА ИНТЕРНЕТ-СОЕДИНЕНИЯ (САМАЯ ПЕРВАЯ)
+        if (!await isRealInternetAvailable()) {
+          addMessage(CHAT_MESSAGES.ERROR_NO_INTERNET);
+          isRecording = false;
+          voiceButton.classList.remove('recording');
+          voiceButton.querySelector('.icon').textContent = '';
+          messageInput.placeholder = MESSAGES.INPUT_PLACEHOLDER;
+          return;
+        }
+
+        // 2. Защита от повторных вызовов
+        if (isProcessing) {
+          console.log('⏳ Уже выполняется остановка записи');
+          return;
+        }
+
+        try {
+          isProcessing = true;
+          isVoiceButtonLocked = true;
+          voiceButton.classList.add('is-loading');
+          voiceButton.querySelector('.icon').textContent = '';
+
+          stopSilenceTimer();
+          isRecording = false;
+
+          if (recognitionTimeout) {
+            clearTimeout(recognitionTimeout);
+            recognitionTimeout = null;
+          }
+
+          messageInput.placeholder = MESSAGES.STATUS_PROCESSING;
+
+          // 3. ОСТАНОВКА РАСПОЗНАВАНИЯ
+          let response;
+          try {
+            response = await fetch('/api/voice/stop', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              }
+            });
+          } catch (fetchError) {
+            console.error('Ошибка остановки распознавания:', fetchError);
+            // 4. ОБРАБОТКА ОШИБКИ СЕРВЕРА
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            isProcessing = false;
+            unlockVoiceButton();
+            return;
+          }
+
+          if (!response.ok) {
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            isProcessing = false;
+            unlockVoiceButton();
+            return;
+          }
+
+          let data;
+          try {
+            data = await response.json();
+          } catch (parseError) {
+            console.error('Ошибка парсинга ответа:', parseError);
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+            isProcessing = false;
+            unlockVoiceButton();
+            return;
+          }
+
+          isProcessing = false;
+          voiceButton.classList.remove('is-loading', 'recording');
+          voiceButton.querySelector('.icon').textContent = '';
+          messageInput.placeholder = MESSAGES.INPUT_PLACEHOLDER;
+          isVoiceButtonLocked = false;
+
+          if (data.success && data.has_text && data.text) {
+            const currentText = messageInput.value;
+            if (currentText) {
+              messageInput.value = currentText + ' ' + data.text;
+            } else {
+              messageInput.value = data.text;
+            }
+            messageInput.focus();
+            messageInput.selectionStart = messageInput.selectionEnd = messageInput.value.length;
+
+            if (pendingSend) {
+              pendingSend = false;
+              const finalMessage = messageInput.value.trim();
+              if (finalMessage) {
+                await doSendMessage(finalMessage);
+              }
+            }
+          } else {
+            if (pendingSend) {
+              pendingSend = false;
+              if (messageInput.value.trim()) {
+                await doSendMessage(messageInput.value.trim());
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Ошибка остановки распознавания:', error);
+          isProcessing = false;
+          voiceButton.classList.remove('is-loading', 'recording');
+          voiceButton.querySelector('.icon').textContent = '';
+          messageInput.placeholder = MESSAGES.INPUT_PLACEHOLDER;
+          isVoiceButtonLocked = false;
+
+          // 5. ПРОВЕРКА ИНТЕРНЕТА ПРИ КРИТИЧЕСКОЙ ОШИБКЕ
+          if (!await isRealInternetAvailable()) {
+            addMessage(CHAT_MESSAGES.ERROR_NO_INTERNET);
+          } else {
+            addMessage(CHAT_MESSAGES.ERROR_SERVER);
+          }
+
+          if (pendingSend) {
+            pendingSend = false;
+          }
+        }
+      }
+
+      function toggleVoiceRecording() {
+        // Защита от повторных нажатий во время загрузки или обработки
+        if (isVoiceButtonLocked) {
+          return;
+        }
+
+        if (isRecording) {
+          // Если запись идет, останавливаем и отправляем
+          sendMessage();
+        } else {
+          startVoiceRecording();
+        }
+      }
+
+      // ============================================
+      // ЗАГРУЗКА ГОЛОСОВ
+      // ============================================
+
+      async function loadVoices() {
+        try {
+          const response = await fetch('/api/voice');
+          const data = await response.json();
+
+          if (data.voices) {
+            voiceList.innerHTML = '';
+            data.voices.forEach(voice => {
+              const btn = document.createElement('button');
+              btn.className = 'voice-option';
+              btn.textContent = voice;
+              if (voice === data.current) {
+                btn.classList.add('active');
+              }
+              btn.onclick = () => changeVoice(voice);
+              voiceList.appendChild(btn);
+            });
+
+            currentVoiceLabel.textContent = data.current || 'denis';
+          }
+        } catch (error) {
+          console.error('Ошибка загрузки голосов:', error);
+        }
+      }
+
+      async function changeVoice(voiceName) {
+        try {
+          const response = await fetch('/api/voice/change', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ voice: voiceName }),
+          });
+
+          const data = await response.json();
+
+          if (data.success) {
+            currentVoiceLabel.textContent = voiceName;
+            document.querySelectorAll('.voice-option').forEach(btn => {
+              btn.classList.toggle('active', btn.textContent === voiceName);
+            });
+            voiceModal.style.display = 'none';
+            showNotification(`Голос изменен на ${voiceName}`);
+          } else {
+            showNotification('Ошибка смены голоса: ' + data.error, 'error');
+          }
+        } catch (error) {
+          console.error('Ошибка смены голоса:', error);
+          showNotification('Ошибка смены голоса', 'error');
+        }
+      }
+
+      // ============================================
+      // 6. ПОКАЗ УВЕДОМЛЕНИЙ
+      // ============================================
+
+      function showNotification(message, type = 'info') {
+        const notification = document.createElement('div');
+        notification.className = `notification ${type}`;
+        notification.textContent = message;
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+          notification.classList.add('fade-out');
+          setTimeout(() => notification.remove(), 500);
+        }, 3000);
+      }
+
+      // ============================================
+      // НАВЕШИВАЕМ ОБРАБОТЧИКИ СОБЫТИЙ
+      // ============================================
+
+      // Голосовой ввод
+      voiceButton.addEventListener('click', toggleVoiceRecording);
+      voiceButton.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        toggleVoiceRecording();
+      });
+
+      // Отправка сообщения
+      messageInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+
+      sendButton.addEventListener('click', sendMessage);
+
+      // Переключение озвучки
+      voiceToggleBtn.addEventListener('click', () => {
+        isAudioEnabled = !isAudioEnabled;
+        voiceToggleBtn.classList.toggle('disabled', !isAudioEnabled);
+        document.querySelector('.voice-status').textContent =
+          isAudioEnabled ? 'Голос включен' : 'Голос выключен';
+
+        if (!isAudioEnabled && currentAudio) {
+          currentAudio.pause();
+          currentAudio = null;
+        }
+
+        showNotification(isAudioEnabled ? '🔊 Голос включен' : '🔇 Голос выключен');
+      });
+
+      // Выбор голоса
+      voiceSelectBtn.addEventListener('click', () => {
+        loadVoices();
+        voiceModal.style.display = 'block';
+      });
+
+      closeModalBtn.addEventListener('click', () => {
+        voiceModal.style.display = 'none';
+      });
+
+      window.addEventListener('click', (e) => {
+        if (e.target === voiceModal) {
+          voiceModal.style.display = 'none';
+        }
+      });
+
+      // Обработка закрытия страницы
+      window.addEventListener('beforeunload', () => {
+        if (isRecording) {
+          // Отправляем асинхронный запрос на остановку
+          fetch('/api/voice/stop', { method: 'POST' }).catch(() => {});
+        }
+      });
+
+      // ============================================
+      // СКРОЛЛ К НИЗУ СТРАНИЦЫ
+      // ============================================
+      function smoothScrollToBottom() {
+        window.scrollTo({
+          top: document.documentElement.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
+
+      function handleMascotScroll() {
+        const scrollY = window.pageYOffset || window.scrollY || document.documentElement.scrollTop;
+        if (!!handleMascotScroll) {
+          if (scrollY > 100) {
+            mascot.classList.add('is-fixed');
+          } else {
+            mascot.classList.remove('is-fixed');
+          }
+        }
+      }
+
+      window.addEventListener('scroll', handleMascotScroll);
+      handleMascotScroll();
+
+      // ============================================
+      // ТАЙМЕР МОЛЧАНИЯ
+      // ============================================
+
+      // Функция для сброса таймера молчания
+      function resetSilenceTimer() {
+        if (!isRecording) return;
+
+        // Обновляем время последней активности
+        lastAudioTimestamp = Date.now();
+
+        // Если таймер уже запущен, сбрасываем его
+        if (silenceTimer) {
+          clearTimeout(silenceTimer);
+          silenceTimer = null;
+        }
+
+        // Запускаем новый таймер
+        silenceTimer = setTimeout(() => {
+          // Проверяем, не было ли активности за время ожидания
+          const silenceDuration = Date.now() - lastAudioTimestamp;
+          if (silenceDuration >= SILENCE_TIMEOUT && isRecording) {
+            console.log('🔇 Обнаружено молчание более 5 секунд. Отправка сообщения...');
+            // Автоматически отправляем сообщение
+            sendMessage();
+          }
+        }, SILENCE_TIMEOUT);
+      }
+
+      // Функция для остановки таймера молчания
+      function stopSilenceTimer() {
+        if (silenceTimer) {
+          clearTimeout(silenceTimer);
+          silenceTimer = null;
+        }
+      }
+
+      // ============================================
+      // ИНИЦИАЛИЗАЦИЯ
+      // ============================================
+      loadVoices();
+      smoothScrollToBottom();
+      console.log('Ассистент Тимурка с голосовым вводом загружен!');
+    </script>
+  </body>
+</html>

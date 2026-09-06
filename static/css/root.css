@@ -1,0 +1,31 @@
+:root {
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #f3f3f3;
+  --color-bg-tertiary: #f0f0f0;
+  --color-elem-primary: #2c3241; /* #392c41 */
+  --color-elem-primary-highlight: #5f4471; /* #714457 */
+  --color-elem-red: #b31f3b;
+  --color-elem-secondary: #8e818e;
+  --color-elem-accent-primary: #5b1fb3; /* #b31f98 */
+  --color-border-primary: #e4f2e9;
+  --color-border-secondary: #d1e8d9;
+
+  --gradient-accent: linear-gradient(
+    to right bottom,
+    var(--color-elem-primary-highlight),
+    var(--color-elem-primary)
+  );
+
+  --gap-sections: 4rem;
+  --gap-blocks: 2rem;
+  --border-radius-e: 99999rem;
+  --border-radius-l: 1.75rem;
+  --border-radius-m: 1.15rem;
+  --border-radius-s: .75rem;
+  --font-name-primary: "SN pro", "Noto Color Emoji", sans-serif;
+  --font-name-secondary: "Balsamiq Sans", "Noto Color Emoji", sans-serif;
+  --width-content-area: 934px;
+  --padding-side-content-area: 1rem;
+  --font-size-content: 1.25rem;
+  --font-size-heading: 2.25rem;
+}
