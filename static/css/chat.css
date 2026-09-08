@@ -87,7 +87,9 @@
   aspect-ratio: 1/1;
   background-image: url(../images/timurka-2.png);
   background-size: 100%;
-  background-position: center;
+  background-position-x: center;
+  background-repeat: no-repeat;
+  background-position-y: bottom;
   transition: 600ms ease;
   animation: mascotHover 10s infinite;
 }

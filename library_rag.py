@@ -6,6 +6,12 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
+from datetime import datetime
+import logging
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class LibraryRAGSystem:
@@ -16,15 +22,15 @@ class LibraryRAGSystem:
 
     def __init__(self, model_name: str = 'all-MiniLM-L6-v2',
                  vector_dim: int = 384,
-                 chunk_size: int = 1500,
-                 chunk_overlap: int = 200):
+                 chunk_size: int = 800,  # Уменьшил для лучшего захвата конкретной информации
+                 chunk_overlap: int = 150):
         """
         Инициализация RAG системы для библиотеки.
 
         Args:
             model_name: имя модели Sentence-Transformers
             vector_dim: размерность векторов (для all-MiniLM-L6-v2 = 384)
-            chunk_size: размер чанка в символах (для длинных текстов)
+            chunk_size: размер чанка в символах
             chunk_overlap: перекрытие между чанками
         """
         self.model_name = model_name
@@ -33,60 +39,111 @@ class LibraryRAGSystem:
         self.chunk_overlap = chunk_overlap
         self.model = None
         self.index = None
-        self.metadata = []  # список словарей с метаданными для каждого чанка
+        self.metadata = []
+
+        # Добавляем кэш для часто задаваемых вопросов
+        self.query_cache = {}
 
     def load_model(self):
         """Загрузка модели Sentence-Transformers."""
         if self.model is None:
-            print(f"📚 Загрузка модели {self.model_name}...")
+            logger.info(f"Загрузка модели {self.model_name}...")
             self.model = SentenceTransformer(self.model_name)
-            print(f"✅ Модель загружена. Размер эмбеддингов: {self.vector_dim}")
+            logger.info(f"Модель загружена. Размер эмбеддингов: {self.vector_dim}")
 
     def extract_metadata_from_text(self, text: str, filename: str) -> Dict:
         """
-        Извлечение мета-тегов из текста для улучшенного поиска.
-        Ищет ключевые слова: тематика, возраст, тип контента.
-
-        Args:
-            text: текст содержимого
-            filename: имя файла
-
-        Returns:
-            словарь с извлеченными метаданными
+        Расширенное извлечение мета-тегов из текста для улучшенного поиска.
         """
         metadata = {
             'filename': filename,
             'topics': [],
             'age_group': None,
-            'content_type': None,  # 'events', 'clubs', 'rules', 'resources', 'recommendations'
-            'keywords': []
+            'content_type': None,
+            'keywords': [],
+            'named_entities': [],  # Имена, названия, даты
+            'has_dates': False,
+            'has_contacts': False
         }
 
-        # Определение типа контента по ключевым словам
-        if re.search(r'(мероприяти[ея]|квартирник|библионочь|лекци[яи]|встреч[ау])', text, re.IGNORECASE):
-            metadata['content_type'] = 'events'
-        elif re.search(r'(клуб|объединени[ея]|круж[оек]|English Corner)', text, re.IGNORECASE):
-            metadata['content_type'] = 'clubs'
-        elif re.search(r'(правил[ао]|пользовани[ею]|задолженност[ьи]|просрочк[ау])', text, re.IGNORECASE):
-            metadata['content_type'] = 'rules'
-        elif re.search(r'(электронн[ыy]|ресурс[аы]|литрес|НЭБ|баз[ау]|журнал[аы])', text, re.IGNORECASE):
-            metadata['content_type'] = 'resources'
-        elif re.search(r'(рекомендаци[ия]|книг[аи]|прочитать|почитать|список)', text, re.IGNORECASE):
-            metadata['content_type'] = 'recommendations'
+        # ===== ОПРЕДЕЛЕНИЕ ТИПА КОНТЕНТА =====
+        content_patterns = {
+            'events': [
+                r'(мероприяти[ея]|квартирник|библионочь|лекци[яи]|встреч[ау]|праздник|фестиваль|конкурс|акция|неделя|день|час|урок|экскурсия|познавательный|игровой)',
+                r'\d{1,2}\s+(январ[яь]|феврал[яь]|март[а]?|апрел[яь]|ма[яй]|июн[яь]|июл[яь]|август[а]?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь]|января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)'
+            ],
+            'clubs': [
+                r'(клуб|объединени[ея]|круж[оек]|студия|школа|мастерская|академия|театр|мастер-класс|занятие|обучение)'
+            ],
+            'rules': [
+                r'(правил[ао]|пользовани[ею]|задолженност[ьи]|просрочк[ау]|запись|формуляр|возврат|читательский|должник|замена|утрата|повреждение)'
+            ],
+            'resources': [
+                r'(электронн[ыy]|ресурс[аы]|литрес|НЭБ|баз[ау]|журнал[аы]|каталог|сайт|портал|онлайн|доступ|цифровой|интерактивный)'
+            ],
+            'about_library': [
+                r'(история|основан|открыт|год|юбилей|проект|грант|пространство|оборудование|структура|отдел|абонемент|читальный зал)'
+            ]
+        }
 
-        # Поиск возрастных меток
-        age_match = re.search(r'(\d+)\s*(лет|год|года|age|years?)\s*[+-]?', text, re.IGNORECASE)
-        if age_match:
-            metadata['age_group'] = age_match.group(1)
+        for content_type, patterns in content_patterns.items():
+            if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
+                if metadata['content_type'] is None:
+                    metadata['content_type'] = content_type
+                elif content_type != 'about_library' and metadata['content_type'] == 'about_library':
+                    metadata['content_type'] = content_type  # Приоритет у специфических типов
 
-        # Извлечение ключевых слов (простых тематик)
+        # ===== ИЗВЛЕЧЕНИЕ ВОЗРАСТНЫХ МЕТОК =====
+        age_patterns = [
+            r'(\d+)\s*(лет|год|года|age|years?)\s*[+-]?',
+            r'(до|с|от)\s*(\d+)\s*лет',
+            r'для\s*(детей|подростков)\s*(до|с|от)\s*(\d+)\s*лет'
+        ]
+
+        for pattern in age_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                age = match.group(1) if 'до' in pattern or 'с' in pattern or 'от' in pattern else match.group(1)
+                metadata['age_group'] = age
+                break
+
+        # ===== ИЗВЛЕЧЕНИЕ ИМЕН И НАЗВАНИЙ =====
+        # Названия проектов, клубов, мероприятий в кавычках
+        entities = re.findall(r'["«]([^"»]+)["»]', text)
+        if entities:
+            metadata['named_entities'].extend(entities[:5])
+
+        # Названия с большой буквы (простейшая эвристика)
+        capitalized = re.findall(r'\b([А-Я][а-я]+(?:\s+[А-Я][а-я]+)*)\b', text)
+        if capitalized:
+            metadata['named_entities'].extend(capitalized[:3])
+
+        # ===== ПОИСК ДАТ =====
+        date_patterns = [
+            r'\d{1,2}\s+(январ[яь]|феврал[яь]|март[а]?|апрел[яь]|ма[яй]|июн[яь]|июл[яь]|август[а]?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь])',
+            r'\d{2}\.\d{2}\.\d{4}',
+            r'\d{4}\s+год[ау]?',
+            r'\d{1,2}\s+числа'
+        ]
+        if any(re.search(pattern, text, re.IGNORECASE) for pattern in date_patterns):
+            metadata['has_dates'] = True
+
+        # ===== ПОИСК КОНТАКТОВ =====
+        if re.search(r'(тел|phone|контакт|@|\.ru|\.com)', text, re.IGNORECASE):
+            metadata['has_contacts'] = True
+
+        # ===== РАСШИРЕННЫЕ ТЕМЫ =====
         topics_keywords = {
-            'музыка': ['музыкальный', 'квартирник', 'песни', 'гитара'],
-            'спорт': ['настольные игры', 'шахматы', 'турнир'],
-            'наука': ['лекция', 'научный', 'познавательный', 'астрономия'],
-            'детство': ['дет', 'ребёнок', 'малыш', 'родитель'],
-            'история': ['историческ', 'реконструкц', 'краеведен'],
-            'языки': ['английский', 'English', 'разговорный']
+            'музыка': ['музыкальн', 'квартирник', 'песни', 'гитара', 'концерт'],
+            'спорт': ['настольные игры', 'шахматы', 'турнир', 'спорт', 'движение'],
+            'наука': ['лекция', 'научн', 'познавательн', 'астрономия', 'опыт', 'эксперимент'],
+            'детство': ['дет', 'ребёнк', 'малыш', 'родитель', 'семья', 'дошкольник'],
+            'история': ['историческ', 'реконструкц', 'краеведен', 'прошлое', 'память'],
+            'языки': ['английск', 'English', 'разговорн', 'бурятск', 'язык'],
+            'творчество': ['творческ', 'рисован', 'лепк', 'поделк', 'мастер', 'рукоделие'],
+            'экология': ['экологическ', 'природ', 'нерпёнок', 'лесовичок', 'экосистем', 'защит'],
+            'литература': ['книг', 'чтени', 'писател', 'поэт', 'сказк', 'рассказ', 'роман'],
+            'технологии': ['интерактивн', 'цифров', 'виртуальн', 'мультфильм', 'оборудование']
         }
 
         for topic, keywords in topics_keywords.items():
@@ -94,33 +151,61 @@ class LibraryRAGSystem:
                 metadata['topics'].append(topic)
                 metadata['keywords'].extend(keywords[:2])
 
+        # Удаляем дубликаты
+        metadata['keywords'] = list(set(metadata['keywords']))[:5]
+        metadata['topics'] = list(set(metadata['topics']))
+
         return metadata
 
     def chunk_text(self, text: str, filename: str, chunk_id: int) -> List[Dict]:
         """
-        Умное разбиение текста на чанки с сохранением границ абзацев.
-
-        Args:
-            text: исходный текст
-            filename: имя файла
-            chunk_id: базовый идентификатор чанка
-
-        Returns:
-            список чанков с метаданными
+        Улучшенное разбиение текста на чанки с учетом структуры документа.
         """
         chunks = []
 
-        # Сначала пробуем разбить по двойным переносам строк (абзацы)
-        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+        # Очистка текста
+        text = re.sub(r'\n\s*\n', '\n\n', text)  # Нормализация переносов
+        text = re.sub(r'[ \t]+', ' ', text)  # Удаление лишних пробелов
 
-        current_chunk = ""
-        current_length = 0
+        # Разбиение по логическим блокам (заголовки, абзацы)
+        # Ищем заголовки (текст с двоеточием в конце или отдельный абзац)
+        lines = text.split('\n')
+        paragraphs = []
+        current_para = []
 
+        for line in lines:
+            line = line.strip()
+            if not line:
+                if current_para:
+                    paragraphs.append(' '.join(current_para))
+                    current_para = []
+                continue
+
+            # Если строка заканчивается на ":" и не слишком длинная - это заголовок
+            if line.endswith(':') and len(line) < 100 and current_para:
+                paragraphs.append(' '.join(current_para))
+                current_para = [line]
+            else:
+                current_para.append(line)
+
+        if current_para:
+            paragraphs.append(' '.join(current_para))
+
+        # Объединяем слишком короткие абзацы
+        merged_paragraphs = []
         for para in paragraphs:
+            if len(para) < 100 and merged_paragraphs and len(merged_paragraphs[-1]) < self.chunk_size * 0.7:
+                merged_paragraphs[-1] += ' ' + para
+            else:
+                merged_paragraphs.append(para)
+
+        # Создание чанков
+        current_chunk = ""
+        for para in merged_paragraphs:
             para_len = len(para)
 
-            # Если абзац сам по себе больше chunk_size, разбиваем его жестко
-            if para_len > self.chunk_size:
+            # Если абзац очень длинный - жесткое разбиение
+            if para_len > self.chunk_size * 1.5:
                 if current_chunk:
                     chunks.append({
                         'text': current_chunk.strip(),
@@ -129,27 +214,36 @@ class LibraryRAGSystem:
                     })
                     chunk_id += 1
                     current_chunk = ""
-                    current_length = 0
 
-                # Жесткое разбиение длинного абзаца
-                for i in range(0, para_len, self.chunk_size - self.chunk_overlap):
-                    chunk_text = para[i:i + self.chunk_size]
+                # Разбиваем по предложениям
+                sentences = re.split(r'(?<=[.!?])\s+', para)
+                temp_chunk = ""
+                for sent in sentences:
+                    if len(temp_chunk) + len(sent) < self.chunk_size:
+                        temp_chunk += sent + ' '
+                    else:
+                        if temp_chunk:
+                            chunks.append({
+                                'text': temp_chunk.strip(),
+                                'chunk_id': chunk_id,
+                                'type': 'sentence'
+                            })
+                            chunk_id += 1
+                        temp_chunk = sent + ' '
+                if temp_chunk:
                     chunks.append({
-                        'text': chunk_text.strip(),
+                        'text': temp_chunk.strip(),
                         'chunk_id': chunk_id,
-                        'type': 'forced'
+                        'type': 'sentence'
                     })
                     chunk_id += 1
 
-            # Если добавление абзаца не превышает лимит - добавляем
-            elif current_length + para_len + 2 <= self.chunk_size:
+            # Обычный абзац
+            elif len(current_chunk) + para_len + 2 <= self.chunk_size:
                 if current_chunk:
-                    current_chunk += "\n\n" + para
+                    current_chunk += ' ' + para
                 else:
                     current_chunk = para
-                current_length += para_len + 2
-
-            # Иначе сохраняем текущий чанк и начинаем новый
             else:
                 if current_chunk:
                     chunks.append({
@@ -159,7 +253,6 @@ class LibraryRAGSystem:
                     })
                     chunk_id += 1
                 current_chunk = para
-                current_length = para_len
 
         # Добавляем последний чанк
         if current_chunk:
@@ -170,55 +263,74 @@ class LibraryRAGSystem:
             })
             chunk_id += 1
 
-        return chunks, chunk_id
+        # Постобработка: если чанки слишком маленькие, объединяем их
+        optimized_chunks = []
+        i = 0
+        while i < len(chunks):
+            if i < len(chunks) - 1 and len(chunks[i]['text']) < 200:
+                combined = chunks[i]['text'] + ' ' + chunks[i + 1]['text']
+                if len(combined) <= self.chunk_size:
+                    optimized_chunks.append({
+                        'text': combined,
+                        'chunk_id': chunks[i]['chunk_id'],
+                        'type': 'combined'
+                    })
+                    i += 2
+                    continue
+            optimized_chunks.append(chunks[i])
+            i += 1
+
+        return optimized_chunks, chunk_id
 
     def train(self, data_dir: str = './data', save_dir: str = 'vector_store'):
         """
         Обучение RAG: векторизация всех текстов из ./data/text*.txt
-
-        Args:
-            data_dir: директория с файлами text1.txt, text2.txt и т.д.
-            save_dir: директория для сохранения векторной базы
         """
         self.load_model()
 
-        # Поиск всех файлов text*.txt
-        txt_files = sorted(glob.glob(os.path.join(data_dir, 'text*.txt')))
+        # Поиск всех текстовых файлов
+        txt_files = sorted(glob.glob(os.path.join(data_dir, '*.txt')))
+
+        # Если нет .txt, ищем любые текстовые файлы
+        if not txt_files:
+            txt_files = sorted(glob.glob(os.path.join(data_dir, '*.md'))) + \
+                        sorted(glob.glob(os.path.join(data_dir, '*.rst')))
 
         if not txt_files:
-            raise ValueError(f"❌ Не найдено файлов text*.txt в директории {data_dir}")
+            raise ValueError(f"❌ Не найдено текстовых файлов в директории {data_dir}")
 
-        print(f"📁 Найдено {len(txt_files)} файлов: {[os.path.basename(f) for f in txt_files]}")
+        logger.info(f"Найдено {len(txt_files)} файлов: {[os.path.basename(f) for f in txt_files]}")
 
-        all_chunks = []  # список текстов чанков
-        self.metadata = []  # метаданные для каждого чанка
+        all_chunks = []
+        self.metadata = []
         global_chunk_id = 0
 
-        # Обработка каждого файла
         for file_idx, filepath in enumerate(txt_files, 1):
             filename = os.path.basename(filepath)
-            print(f"\n📄 Обработка {filename}...")
+            logger.info(f"Обработка {filename}...")
 
-            with open(filepath, 'r', encoding='utf-8') as f:
-                full_text = f.read().strip()
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    full_text = f.read().strip()
+            except UnicodeDecodeError:
+                # Пробуем другие кодировки
+                with open(filepath, 'r', encoding='cp1251') as f:
+                    full_text = f.read().strip()
 
             if not full_text:
-                print(f"  ⚠️ Файл пуст, пропускаем")
+                logger.warning(f"Файл {filename} пуст, пропускаем")
                 continue
 
-            # Извлечение метаданных из всего текста
+            # Извлечение метаданных
             file_metadata = self.extract_metadata_from_text(full_text, filename)
 
             # Разбиение на чанки
             chunks, global_chunk_id = self.chunk_text(full_text, filename, global_chunk_id)
+            logger.info(f"  Разбито на {len(chunks)} чанков")
 
-            print(f"  ✂️ Разбито на {len(chunks)} чанков (размер чанка: {self.chunk_size} симв.)")
-
-            # Добавление чанков в общий список
+            # Сохранение чанков
             for chunk in chunks:
                 all_chunks.append(chunk['text'])
-
-                # Метаданные для каждого чанка
                 self.metadata.append({
                     'file_idx': file_idx,
                     'filename': filename,
@@ -231,17 +343,24 @@ class LibraryRAGSystem:
                     'content_type': file_metadata['content_type'],
                     'topics': file_metadata['topics'],
                     'age_group': file_metadata['age_group'],
-                    'keywords': file_metadata['keywords']
+                    'keywords': file_metadata['keywords'],
+                    'named_entities': file_metadata['named_entities'],
+                    'has_dates': file_metadata['has_dates'],
+                    'has_contacts': file_metadata['has_contacts']
                 })
 
-        print(f"\n📊 Итого: {len(all_chunks)} чанков для векторизации")
+        logger.info(f"Итого: {len(all_chunks)} чанков для векторизации")
 
-        # Векторизация
-        print("🔄 Векторизация текстов...")
-        embeddings = self.model.encode(all_chunks, show_progress_bar=True)
+        # Векторизация с учетом длинных текстов
+        logger.info("Векторизация текстов...")
+        embeddings = self.model.encode(
+            all_chunks,
+            show_progress_bar=True,
+            batch_size=32
+        )
         embeddings = np.array(embeddings).astype('float32')
 
-        # Создание FAISS индекса (используем косинусное сходство через нормализацию)
+        # Создание FAISS индекса
         self.index = faiss.IndexFlatIP(self.vector_dim)
         faiss.normalize_L2(embeddings)
         self.index.add(embeddings)
@@ -253,22 +372,17 @@ class LibraryRAGSystem:
         with open(os.path.join(save_dir, 'library_metadata.pkl'), 'wb') as f:
             pickle.dump(self.metadata, f)
 
-        print(f"\n✅ Векторная база сохранена в {save_dir}")
-        print(f"   - Индекс: {self.index.ntotal} векторов")
-        print(f"   - Метаданные: {len(self.metadata)} записей")
+        logger.info(f"Векторная база сохранена в {save_dir}")
+        logger.info(f"  - Индекс: {self.index.ntotal} векторов")
+        logger.info(f"  - Метаданные: {len(self.metadata)} записей")
 
     def load(self, store_dir: str = 'vector_store'):
-        """
-        Загрузка существующей векторной базы.
-
-        Args:
-            store_dir: директория с сохраненной базой
-        """
+        """Загрузка существующей векторной базы."""
         index_path = os.path.join(store_dir, 'library_index.faiss')
         metadata_path = os.path.join(store_dir, 'library_metadata.pkl')
 
         if not os.path.exists(index_path) or not os.path.exists(metadata_path):
-            raise FileNotFoundError(f"❌ База не найдена в {store_dir}. Сначала выполните обучение.")
+            raise FileNotFoundError(f"❌ База не найдена в {store_dir}.")
 
         self.load_model()
         self.index = faiss.read_index(index_path)
@@ -276,189 +390,256 @@ class LibraryRAGSystem:
         with open(metadata_path, 'rb') as f:
             self.metadata = pickle.load(f)
 
-        print(f"✅ Загружена база: {self.index.ntotal} векторов, {len(self.metadata)} чанков")
+        logger.info(f"Загружена база: {self.index.ntotal} векторов, {len(self.metadata)} чанков")
 
     def search(self, query: str, top_k: int = 5,
                similarity_threshold: float = 0.4,
-               filter_by_type: Optional[str] = None) -> List[Dict]:
+               filter_by_type: Optional[str] = None,
+               filter_by_topic: Optional[str] = None,
+               filter_age_group: Optional[str] = None) -> List[Dict]:
         """
-        Поиск релевантных чанков по запросу.
-
-        Args:
-            query: текстовый запрос пользователя
-            top_k: количество возвращаемых результатов
-            similarity_threshold: минимальный порог схожести (0-1)
-            filter_by_type: опциональная фильтрация ('events', 'clubs', 'rules', 'resources', 'recommendations')
-
-        Returns:
-            список результатов с метаданными и оценкой
+        Расширенный поиск с фильтрацией.
         """
         if self.index is None:
-            raise RuntimeError("❌ База не загружена. Вызовите load() или train() сначала.")
+            raise RuntimeError("❌ База не загружена.")
+
+        # Проверка кэша
+        cache_key = f"{query}_{top_k}_{similarity_threshold}_{filter_by_type}_{filter_by_topic}_{filter_age_group}"
+        if cache_key in self.query_cache:
+            return self.query_cache[cache_key]
 
         # Векторизация запроса
         query_embedding = self.model.encode([query])
         query_embedding = np.array(query_embedding).astype('float32')
         faiss.normalize_L2(query_embedding)
 
-        # Поиск (запрашиваем больше для возможной фильтрации)
-        search_k = top_k * 3 if filter_by_type else top_k
-        scores, indices = self.index.search(query_embedding, min(search_k, self.index.ntotal))
+        # Поиск (запрашиваем больше для фильтрации)
+        search_k = min(top_k * 5, self.index.ntotal)
+        scores, indices = self.index.search(query_embedding, search_k)
 
         results = []
         for score, idx in zip(scores[0], indices[0]):
             if idx == -1 or score < similarity_threshold:
                 continue
 
-            # Фильтрация по типу контента
-            if filter_by_type and self.metadata[idx]['content_type'] != filter_by_type:
+            meta = self.metadata[idx]
+
+            # Фильтрация по типу
+            if filter_by_type and meta['content_type'] != filter_by_type:
                 continue
+
+            # Фильтрация по теме
+            if filter_by_topic and filter_by_topic not in meta['topics']:
+                continue
+
+            # Фильтрация по возрастной группе
+            if filter_age_group and meta['age_group']:
+                try:
+                    if int(meta['age_group']) > int(filter_age_group):
+                        continue
+                except (ValueError, TypeError):
+                    pass
 
             results.append({
                 'similarity_score': float(score),
-                'metadata': self.metadata[idx],
-                'content': self.metadata[idx]['text']
+                'metadata': meta,
+                'content': meta['text']
             })
 
             if len(results) >= top_k:
                 break
 
+        # Кэширование результата
+        self.query_cache[cache_key] = results
         return results
 
     def get_context_for_gigachat(self, query: str, top_k: int = 3,
-                                 similarity_threshold: float = 0.4,
-                                 max_chars: int = 3000) -> str:
+                                 similarity_threshold: float = 0.35,
+                                 max_chars: int = 3000,
+                                 include_metadata: bool = True) -> str:
         """
-        Формирование контекста для передачи в GigaChat API.
-
-        Args:
-            query: запрос пользователя
-            top_k: количество чанков
-            similarity_threshold: порог схожести
-            max_chars: максимальная длина контекста
-
-        Returns:
-            строка-контекст для LLM
+        Формирование контекста для GigaChat с улучшенной структурой.
         """
         results = self.search(query, top_k, similarity_threshold)
 
         if not results:
-            return "Контекст: В библиотечной базе не найдено релевантной информации по данному запросу."
+            return "КОНТЕКСТ: В библиотечной базе не найдено релевантной информации по данному запросу."
+
+        # Группировка результатов по темам
+        grouped_results = {}
+        for res in results:
+            topic = 'general'
+            if res['metadata']['topics']:
+                topic = res['metadata']['topics'][0]
+            if topic not in grouped_results:
+                grouped_results[topic] = []
+            grouped_results[topic].append(res)
 
         context_parts = []
         total_chars = 0
 
-        for i, res in enumerate(results, 1):
-            meta = res['metadata']
-            score = res['similarity_score']
+        # Сначала добавляем наиболее релевантные результаты
+        for topic, items in grouped_results.items():
+            # Сортируем внутри группы по релевантности
+            items.sort(key=lambda x: x['similarity_score'], reverse=True)
 
-            # Формируем заголовок с мета-информацией
-            header = f"[Источник: {meta['filename']}"
-            if meta['content_type']:
-                header += f" | Тип: {meta['content_type']}"
-            if meta['topics']:
-                header += f" | Темы: {', '.join(meta['topics'])}"
-            header += f" | Релевантность: {score:.2f}]\n"
+            for res in items[:2]:  # Берем не более 2 из каждой темы
+                meta = res['metadata']
+                score = res['similarity_score']
 
-            chunk_text = res['content']
+                if include_metadata:
+                    header_parts = [
+                        f"📄 Источник: {meta['filename']}",
+                        f"📊 Релевантность: {score:.2f}"
+                    ]
+                    if meta['content_type']:
+                        header_parts.append(f"🏷️ Тип: {meta['content_type']}")
+                    if meta['topics']:
+                        header_parts.append(f"🔖 Темы: {', '.join(meta['topics'][:3])}")
+                    if meta['age_group']:
+                        header_parts.append(f"👤 Возраст: до {meta['age_group']} лет")
 
-            # Ограничение по длине
-            if total_chars + len(header) + len(chunk_text) > max_chars:
-                remaining = max_chars - total_chars - len(header) - 50
-                if remaining > 200:
-                    chunk_text = chunk_text[:remaining] + "...\n[Контекст обрезан по длине]"
+                    header = " | ".join(header_parts) + "\n" + "-" * 40 + "\n"
                 else:
-                    break
+                    header = ""
 
-            context_parts.append(header + chunk_text)
-            total_chars += len(header) + len(chunk_text)
+                chunk_text = res['content']
 
-        return "КОНТЕКСТ ДЛЯ БИБЛИОТЕЧНОГО АССИСТЕНТА:\n\n" + "\n\n---\n\n".join(context_parts)
+                # Обрезка по длине с сохранением смысла
+                if total_chars + len(header) + len(chunk_text) > max_chars:
+                    remaining = max_chars - total_chars - len(header) - 100
+                    if remaining > 200:
+                        # Обрезаем по предложению
+                        sentences = re.split(r'(?<=[.!?])\s+', chunk_text)
+                        trimmed = ""
+                        for sent in sentences:
+                            if len(trimmed) + len(sent) < remaining:
+                                trimmed += sent + ' '
+                            else:
+                                break
+                        chunk_text = trimmed.strip() + "...\n[Контекст обрезан по длине]"
+                    else:
+                        break
+
+                context_parts.append(header + chunk_text)
+                total_chars += len(header) + len(chunk_text)
+
+        return "🏛️ КОНТЕКСТ ДЛЯ БИБЛИОТЕЧНОГО АССИСТЕНТА:\n\n" + "\n\n---\n\n".join(context_parts)
+
+    def get_categorized_context(self, query: str, top_k: int = 5) -> Dict[str, List[Dict]]:
+        """
+        Возвращает контекст, сгруппированный по типам контента.
+        """
+        results = self.search(query, top_k, similarity_threshold=0.3)
+
+        categorized = {
+            'events': [],
+            'clubs': [],
+            'rules': [],
+            'resources': [],
+            'about_library': [],
+            'other': []
+        }
+
+        for res in results:
+            content_type = res['metadata']['content_type'] or 'other'
+            if content_type in categorized:
+                categorized[content_type].append(res)
+            else:
+                categorized['other'].append(res)
+
+        return categorized
+
+    def clear_cache(self):
+        """Очистка кэша запросов."""
+        self.query_cache = {}
+        logger.info("Кэш очищен")
 
 
 # ========== ПРИМЕР ИСПОЛЬЗОВАНИЯ ==========
 
 def main():
     """
-    Пример использования RAG системы для библиотеки.
+    Пример использования улучшенной RAG системы для библиотеки.
     """
-
     # Инициализация
     rag = LibraryRAGSystem(
         model_name='all-MiniLM-L6-v2',
         vector_dim=384,
-        chunk_size=1200,  # Чанки по 1200 символов для библиотечных текстов
-        chunk_overlap=200
+        chunk_size=800,  # Уменьшенный размер для более точного поиска
+        chunk_overlap=150
     )
 
-    # ===== РЕЖИМ 1: ОБУЧЕНИЕ (однократно) =====
     print("\n" + "=" * 60)
-    print("📚 БИБЛИОТЕЧНАЯ RAG СИСТЕМА - РЕЖИМ ОБУЧЕНИЯ")
+    print("📚 БИБЛИОТЕЧНАЯ RAG СИСТЕМА (УЛУЧШЕННАЯ)")
     print("=" * 60)
 
-    # Укажите ваш путь к папке ./data с файлами text1.txt, text2.txt и т.д.
-    DATA_PATH = "./data"  # Измените на ваш абсолютный путь, если нужно
-    # Например: DATA_PATH = "C:/Users/YourName./data" или DATA_PATH = "../data"
+    # Проверяем наличие данных
+    DATA_PATH = "./data"
 
     if os.path.exists(DATA_PATH):
         rag.train(data_dir=DATA_PATH, save_dir='vector_store')
     else:
-        print(f"⚠️ Директория {DATA_PATH} не найдена.")
-        print("Создаю тестовую директорию ./test_data для демонстрации...")
+        logger.warning(f"Директория {DATA_PATH} не найдена. Создаю тестовую...")
+        os.makedirs(DATA_PATH, exist_ok=True)
 
-        # Демонстрация на тестовых данных
-        os.makedirs('./test_data', exist_ok=True)
+        # Пример текста из вашего файла
+        test_content = """Детская библиотека (библиотека-филиал №17) была основана в 1966 году. 
+        В 1968 году ей было присвоено имя детского писателя Аркадия Петровича Гайдара.
 
-        # Сохраняем сгенерированные вами тексты как example
-        test_files = [
-            ('text1.txt',
-             "Музыкальный квартирник состоится 29 мая в 19:00. Приходите с гитарами и хорошим настроением..."),
-            ('text2.txt', "Библионочь 2026 пройдет 6 июня. Тема: Традиции будущего. Вход свободный..."),
-            ('text3.txt', "Клуб любителей фантастики 'Терра Инкогнита' собирается каждую субботу в 15:00..."),
-        ]
+        Библиотека обслуживает детей до 14 лет включительно, а также их родителей, учителей.
 
-        for fname, content in test_files:
-            with open(f'./test_data/{fname}', 'w', encoding='utf-8') as f:
-                f.write(content)
+        Структура библиотеки:
+        - Младший абонемент;
+        - Старший абонемент;
+        - Читальный зал с интерактивным оборудованием.
 
-        rag.train(data_dir='./test_data', save_dir='vector_store')
+        В библиотеке работают кружки и клубы:
+        Клуб народной куклы "Куклеюшка".
+        Кукольный театр "Алтан гэрхэн".
+        Кружок экологического конструирования "Лесовичок".
+        Литературно-драматический кружок "Радуга".
+        Экологический кружок "Нерпёнок".
+        """
 
-    # ===== РЕЖИМ 2: ПОИСК И КОНТЕКСТ =====
-    print("\n" + "=" * 60)
-    print("🔍 БИБЛИОТЕЧНАЯ RAG СИСТЕМА - ПОИСК")
-    print("=" * 60)
+        with open(os.path.join(DATA_PATH, 'text1.txt'), 'w', encoding='utf-8') as f:
+            f.write(test_content)
 
+        rag.train(data_dir=DATA_PATH, save_dir='vector_store')
+
+    # Загрузка и тестирование
     rag.load(save_dir='vector_store')
 
-    # Тестовые запросы (эмулирующие вопросы читателей)
+    print("\n" + "=" * 60)
+    print("🔍 ТЕСТИРОВАНИЕ ПОИСКА")
+    print("=" * 60)
+
     test_queries = [
-        "Когда будет ближайший квартирник?",
-        "Какие есть клубы для любителей фантастики?",
-        "Расскажи про электронные ресурсы библиотеки",
-        "Что можно почитать семилетнему ребенку?",
-        "Правила продления книги онлайн"
+        "Какие есть кружки для детей?",
+        "Сколько лет библиотеке?",
+        "Что такое Нерпёнок?",
+        "Есть ли кукольный театр?"
     ]
 
     for query in test_queries:
         print(f"\n📌 ЗАПРОС: {query}")
         print("-" * 40)
 
-        # Поиск с фильтрацией (пример)
         context = rag.get_context_for_gigachat(
             query=query,
             top_k=3,
-            similarity_threshold=0.35
+            similarity_threshold=0.3
         )
 
-        print(context[:500] + "..." if len(context) > 500 else context)
+        print(context[:800] + "..." if len(context) > 800 else context)
         print("\n" + "=" * 60)
 
-        # Дополнительно: вывод результатов с метаданными
-        print("\n📊 Детальные результаты поиска:")
-        results = rag.search(query, top_k=2)
-        for i, res in enumerate(results, 1):
-            print(
-                f"  {i}. {res['metadata']['filename']} (релевантность: {res['similarity_score']:.3f}) - тип: {res['metadata']['content_type']}")
+        # Показать категоризацию
+        categorized = rag.get_categorized_context(query, top_k=3)
+        print("\n📊 Категоризация результатов:")
+        for cat, items in categorized.items():
+            if items:
+                print(f"  {cat}: {len(items)} результатов")
 
 
 if __name__ == "__main__":
